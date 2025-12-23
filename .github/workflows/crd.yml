@@ -1,0 +1,44 @@
+name: Windows CRD (Final Token Fix)
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    name: Start Windows CRD
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Download CRD using Curl
+      run: |
+        curl -L -o crd.msi "https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.msi"
+
+    - name: Install CRD
+      run: |
+        Write-Host "Installing CRD..."
+        Start-Process msiexec.exe -ArgumentList "/i crd.msi /qn" -Wait
+        Remove-Item crd.msi
+
+    - name: Setup CRD Authorization
+      shell: powershell
+      env:
+        # Secret-কে সরাসরি কোডে না বসিয়ে এখানে ভেরিয়েবল হিসেবে নেওয়া হচ্ছে
+        # এতে কোটেশন মার্কের সমস্যা আর হবে না
+        MY_CRD_TOKEN: ${{ secrets.CRD_CODE }}
+        MY_PIN: ${{ secrets.PIN }}
+      run: |
+        Write-Host "Authorizing..."
+        # টোকেন এবং পিন একসাথে জোড়া লাগিয়ে রান করা হচ্ছে
+        $final_command = "$env:MY_CRD_TOKEN --pin=$env:MY_PIN"
+        Invoke-Expression $final_command
+
+    - name: Keep Session Alive
+      run: |
+        Write-Host "CRD is running successfully. Connect now!"
+        while ($true) {
+          Start-Sleep -Seconds 60
+          Write-Host "Session is active..."
+        }
