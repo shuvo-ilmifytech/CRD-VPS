@@ -1,0 +1,80 @@
+name: Windows CRD (Final Agent Fix)
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    name: Start Windows CRD
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Download CRD (User-Agent Fix)
+      run: |
+        # Google কে ব্রাউজার ভাবানোর জন্য আমরা User-Agent অ্যাড করেছি
+        # এটি 1KB ফাইল নামানো বন্ধ করবে এবং আসল ফাইল নামাবে
+        curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -o crd.msi "https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.msi"
+
+    - name: Install CRD
+      run: |
+        Write-Host "Installing CRD..."
+        # ফাইলটি চেক করা হচ্ছে আসল নাকি ফেইক
+        if ((Get-Item crd.msi).Length -lt 1000000) {
+            Write-Error "Error: Downloaded file is too small (likely 404 error). Stopping."
+            exit 1
+        }
+        Start-Process msiexec.exe -ArgumentList "/i crd.msi /qn" -Wait
+        Remove-Item crd.msi
+
+    - name: Authorize and Start (Fixed Path Search)
+      shell: powershell
+      env:
+        MY_SECRET_CODE: ${{ secrets.CRD_CODE }}
+        MY_PIN: ${{ secrets.PIN }}
+      run: |
+        Write-Host "Searching for installed CRD binary..."
+        
+        # ১. প্রথমে সাধারণ পাথগুলো চেক করা (দ্রুত হবে)
+        $possiblePaths = @(
+            "C:\Program Files (x86)\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe",
+            "C:\Program Files\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe"
+        )
+        
+        $launcherPath = $null
+        foreach ($path in $possiblePaths) {
+            if (Test-Path $path) {
+                $launcherPath = $path
+                break
+            }
+        }
+
+        # ২. যদি না পাওয়া যায়, পুরো প্রোগ্রাম ফাইল ফোল্ডার খোঁজা
+        if (-not $launcherPath) {
+            Write-Host "Default path invalid. Searching recursively..."
+            $launcherPath = Get-ChildItem "C:\Program Files*" -Include "remoting_start_host.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
+        }
+
+        if (-not $launcherPath) {
+            Write-Error "CRITICAL: CRD software not found on the system."
+            exit 1
+        }
+        Write-Host "Target found: $launcherPath"
+
+        # ৩. কোড ক্লিনিং এবং রান
+        $code = $env:MY_SECRET_CODE
+        if ($code -match '4/[0-9a-zA-Z\-_]+') {
+            $code = $matches[0]
+        }
+
+        & $launcherPath --code="$code" --redirect-url="https://remotedesktop.google.com/_/oauthredirect" --name="GitHub-VPS" --pin="$env:MY_PIN"
+
+    - name: Keep Session Alive
+      run: |
+        Write-Host "Success! Connect here: https://remotedesktop.google.com/access"
+        while ($true) {
+          Start-Sleep -Seconds 60
+          Write-Host "Session is active..."
+        }
