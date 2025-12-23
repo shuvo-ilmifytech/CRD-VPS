@@ -1,0 +1,63 @@
+name: Windows CRD (Curl Final)
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    name: Start Windows CRD
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Download CRD (Using Curl)
+      run: |
+        # PowerShell এর ডাউনলোড মেথড ফেইল করায় আমরা Curl ব্যবহার করছি (এটি প্রমাণিতভাবে কাজ করে)
+        curl -L -o crd.msi "https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.msi"
+
+    - name: Install CRD
+      run: |
+        Write-Host "Installing CRD..."
+        Start-Process msiexec.exe -ArgumentList "/i crd.msi /qn" -Wait
+        Remove-Item crd.msi
+
+    - name: Authorize and Start
+      shell: powershell
+      env:
+        # Secret কে এনভায়রনমেন্ট ভেরিয়েবল হিসেবে নেওয়া হচ্ছে
+        MY_SECRET_CODE: ${{ secrets.CRD_CODE }}
+        MY_PIN: ${{ secrets.PIN }}
+      run: |
+        # ১. ফাইলটি সঠিক জায়গায় আছে কিনা চেক করা
+        $launcherPath = "C:\Program Files (x86)\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe"
+        
+        # যদি ডিফল্ট পাথে না থাকে, খুঁজে বের করো
+        if (-not (Test-Path $launcherPath)) {
+            Write-Host "Default path not found, searching..."
+            $launcherPath = Get-ChildItem "C:\Program Files (x86)\Google\Chrome Remote Desktop" -Filter "remoting_start_host.exe" -Recurse | Select-Object -ExpandProperty FullName -First 1
+        }
+
+        if (-not $launcherPath) {
+            Write-Error "CRD Binary not found! Installation failed."
+            exit 1
+        }
+        Write-Host "CRD Executable Found: $launcherPath"
+
+        # ২. কোড ফরম্যাট ঠিক করা (স্পেস বা অন্য কিছু থাকলে রিমুভ করবে)
+        $code = $env:MY_SECRET_CODE
+        if ($code -match '4/[0-9a-zA-Z\-_]+') {
+            $code = $matches[0]
+        }
+
+        # ৩. মেইন কমান্ড রান করা
+        & $launcherPath --code="$code" --redirect-url="https://remotedesktop.google.com/_/oauthredirect" --name="GitHub-VPS" --pin="$env:MY_PIN"
+
+    - name: Keep Session Alive
+      run: |
+        Write-Host "Success! Connect here: https://remotedesktop.google.com/access"
+        while ($true) {
+          Start-Sleep -Seconds 60
+          Write-Host "Session is active..."
+        }
