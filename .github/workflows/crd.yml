@@ -1,0 +1,75 @@
+name: Windows CRD (Referer Fix)
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    name: Start Windows CRD
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Download CRD (With Referer Bypass)
+      shell: cmd
+      run: |
+        @echo off
+        echo Downloading CRD with Referer Header...
+        
+        :: আমরা এখানে সরাসরি cmd ব্যবহার করছি এবং Referer দিচ্ছি যাতে Google ব্লক না করে
+        curl -L -H "Referer: https://remotedesktop.google.com/" -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -o crd.msi "https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.msi"
+
+    - name: Verify & Install
+      shell: powershell
+      run: |
+        $file = "crd.msi"
+        if (Test-Path $file) {
+            $size = (Get-Item $file).Length
+            Write-Host "File Size: $size bytes"
+            
+            # সাইজ চেক: ফাইলটি অবশ্যই ১০ মেগাবাইটের বেশি হতে হবে
+            if ($size -lt 10000000) {
+                Write-Error "Download Failed! Google blocked the request (File too small)."
+                exit 1
+            }
+        } else {
+             Write-Error "File not found!"
+             exit 1
+        }
+
+        Write-Host "Installing CRD..."
+        Start-Process msiexec.exe -ArgumentList "/i crd.msi /qn" -Wait
+        Remove-Item crd.msi
+
+    - name: Authorize and Start
+      shell: powershell
+      env:
+        MY_SECRET_CODE: ${{ secrets.CRD_CODE }}
+        MY_PIN: ${{ secrets.PIN }}
+      run: |
+        Write-Host "Searching for installed binary..."
+        $launcherPath = Get-ChildItem "C:\Program Files*" -Include "remoting_start_host.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
+
+        if (-not $launcherPath) {
+            Write-Error "CRD Not Found! Installation failed."
+            exit 1
+        }
+        Write-Host "Found: $launcherPath"
+
+        # কোড ক্লিনিং
+        $code = $env:MY_SECRET_CODE
+        if ($code -match '4/[0-9a-zA-Z\-_]+') {
+            $code = $matches[0]
+        }
+
+        & $launcherPath --code="$code" --redirect-url="https://remotedesktop.google.com/_/oauthredirect" --name="GitHub-VPS" --pin="$env:MY_PIN"
+
+    - name: Keep Session Alive
+      run: |
+        Write-Host "Success! Connect here: https://remotedesktop.google.com/access"
+        while ($true) {
+          Start-Sleep -Seconds 60
+          Write-Host "Session is active..."
+        }
