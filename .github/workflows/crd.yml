@@ -1,0 +1,66 @@
+name: Windows CRD (Ultimate Fix)
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    name: Start Windows CRD
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Download CRD (Curl Method)
+      run: |
+        # Download link fix (Google's redirect handled)
+        curl -L -o crd.msi "https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.msi"
+
+    - name: Install CRD
+      run: |
+        Write-Host "Installing CRD..."
+        Start-Process msiexec.exe -ArgumentList "/i crd.msi /qn" -Wait
+        Remove-Item crd.msi
+
+    - name: Authorize CRD (Regex Method)
+      shell: powershell
+      env:
+        # Secret কে এনভায়রনমেন্ট ভেরিয়েবল হিসেবে নেওয়া হচ্ছে (Syntax Error এড়াতে)
+        RAW_CODE: ${{ secrets.CRD_CODE }}
+        PIN: ${{ secrets.PIN }}
+      run: |
+        # ১. আমরা নিশ্চিত করছি যে CRD সফটওয়্যারটি কোথায় ইন্সটল হয়েছে
+        $launcherPath = "C:\Program Files (x86)\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe"
+        
+        if (-not (Test-Path $launcherPath)) {
+            Write-Error "CRD Installation failed or path changed!"
+            exit 1
+        }
+
+        # ২. ইউজার পুরো কমান্ড দিলেও আমরা শুধু '--code' অংশটি বের করে নেব (Regex দিয়ে)
+        # এটি Path Space বা Quote এরর ১০০% প্রতিরোধ করবে
+        if ($env:RAW_CODE -match '--code="([^"]+)"') {
+            $authCode = $matches[1]
+            Write-Host "Success: Auth Code extracted securely."
+        } elseif ($env:RAW_CODE -match '4/[0-9a-zA-Z\-_]+') {
+             # যদি ইউজার শুধু কোডটুকু পেস্ট করে থাকেন
+             $authCode = $matches[0]
+             Write-Host "Success: Raw Auth Code found."
+        } else {
+            Write-Error "Error: Invalid CRD Code format in Secrets. Please copy the FULL PowerShell command from Google."
+            exit 1
+        }
+
+        # ৩. এবার আমরা ক্লিন ভাবে কমান্ডটি রান করব
+        Write-Host "Starting CRD Host..."
+        
+        & $launcherPath --code="$authCode" --redirect-url="https://remotedesktop.google.com/_/oauthredirect" --name="GitHub-VPS" --pin="$env:PIN"
+
+    - name: Keep Session Alive
+      run: |
+        Write-Host "CRD is running successfully! Go to https://remotedesktop.google.com/access"
+        while ($true) {
+          Start-Sleep -Seconds 60
+          Write-Host "Session is active..."
+        }
