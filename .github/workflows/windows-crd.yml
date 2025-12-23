@@ -1,0 +1,115 @@
+name: Windows CRD (Fixed Download + Start)
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    name: Start Windows CRD
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 1) Download CRD reliably (PowerShell way, no curl alias confusion)
+      - name: Download Chrome Remote Desktop MSI (reliable)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $url = "https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.msi"
+          $out = "crd.msi"
+
+          Write-Host "Downloading CRD from: $url"
+          # Force TLS 1.2+ just in case
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor `
+                                                   [Net.SecurityProtocolType]::Tls13
+
+          # A browser-like User-Agent helps in some edge cases
+          $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+          # Try download with Invoke-WebRequest
+          Invoke-WebRequest -Uri $url -OutFile $out -UserAgent $ua -MaximumRedirection 10
+
+          if (-not (Test-Path $out)) {
+            throw "Download failed: file not found."
+          }
+
+          $len = (Get-Item $out).Length
+          Write-Host "Downloaded size: $len bytes"
+
+          # MSI should be several MB. If it's tiny, it's likely an error page.
+          if ($len -lt 3000000) {
+            $head = Get-Content $out -TotalCount 5 -ErrorAction SilentlyContinue | Out-String
+            Write-Host "File seems too small; first lines (may be HTML):"
+            Write-Host $head
+            throw "Downloaded file is too small - likely blocked/redirect/error."
+          }
+
+      # 2) Install
+      - name: Install CRD
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "Installing CRD..."
+          Start-Process msiexec.exe -ArgumentList "/i crd.msi /qn /norestart" -Wait
+          Remove-Item crd.msi -Force
+
+      # 3) Find binary + start host
+      - name: Authorize and Start CRD Host
+        shell: pwsh
+        env:
+          CRD_CODE: ${{ secrets.CRD_CODE }}
+          CRD_PIN:  ${{ secrets.PIN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:CRD_CODE)) { throw "Missing secret: CRD_CODE" }
+          if ([string]::IsNullOrWhiteSpace($env:CRD_PIN))  { throw "Missing secret: PIN" }
+
+          Write-Host "Searching for remoting_start_host.exe..."
+
+          $possible = @(
+            "C:\Program Files (x86)\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe",
+            "C:\Program Files\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe",
+            "C:\Program Files (x86)\Google\Chrome Remote Desktop\remoting_start_host.exe",
+            "C:\Program Files\Google\Chrome Remote Desktop\remoting_start_host.exe"
+          )
+
+          $exe = $possible | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+          if (-not $exe) {
+            # fallback search
+            $exe = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" -Recurse -ErrorAction SilentlyContinue `
+                  | Where-Object { $_.Name -ieq "remoting_start_host.exe" } `
+                  | Select-Object -ExpandProperty FullName -First 1
+          }
+
+          if (-not $exe) { throw "CRD start binary not found after install." }
+          Write-Host "Found: $exe"
+
+          # Clean code (keep only the 4/.... token if user pasted the full command)
+          $code = $env:CRD_CODE
+          if ($code -match '4\/[0-9A-Za-z\-_]+' ) { $code = $matches[0] }
+
+          # Basic PIN check (6+ digits recommended)
+          if ($env:CRD_PIN.Length -lt 6) { throw "PIN too short. Use at least 6 digits." }
+
+          & $exe `
+            --code="$code" `
+            --redirect-url="https://remotedesktop.google.com/_/oauthredirect" `
+            --name="GitHub-Runner-CRD" `
+            --pin="$env:CRD_PIN"
+
+          Write-Host "CRD host start attempted. If successful, connect: https://remotedesktop.google.com/access"
+
+      # 4) Keep alive
+      - name: Keep Session Alive
+        shell: pwsh
+        run: |
+          Write-Host "Keeping session alive..."
+          while ($true) {
+            Start-Sleep -Seconds 60
+            Write-Host "Still running..."
+          }
