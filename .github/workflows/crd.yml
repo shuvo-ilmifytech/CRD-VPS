@@ -1,0 +1,73 @@
+name: Windows CRD (Ultimate Auto-Fix)
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    name: Start Windows CRD
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Download & Install CRD (Robust Method)
+      run: |
+        $url = "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktop.msi"
+        $output = "crd.msi"
+        $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+
+        Write-Host "Downloading CRD from official source..."
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $output -UserAgent $userAgent -ErrorAction Stop
+        } catch {
+            Write-Host "Primary link failed. Trying backup link..."
+            $url = "https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.msi"
+            Invoke-WebRequest -Uri $url -OutFile $output -UserAgent $userAgent
+        }
+
+        # ফাইল ভেরিফিকেশন (গুরুত্বপূর্ণ ধাপ)
+        if ((Get-Item $output).Length -lt 1000000) { 
+            Write-Error "Download Failed! File is too small (likely a 404 page). Exiting..."
+            exit 1
+        }
+
+        Write-Host "Installing CRD (Please wait)..."
+        Start-Process msiexec.exe -ArgumentList "/i $output /qn" -Wait
+        Remove-Item $output
+
+    - name: Authorize and Start (Dynamic Path Search)
+      shell: powershell
+      env:
+        RAW_CODE: ${{ secrets.CRD_CODE }}
+        PIN: ${{ secrets.PIN }}
+      run: |
+        # ফাইল যেখানেই ইন্সটল হোক, আমরা সেটি খুঁজে বের করব
+        Write-Host "Searching for CRD Host binary..."
+        $launcher = Get-ChildItem "C:\Program Files*" -Include "remoting_start_host.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+        if (-not $launcher) {
+            Write-Error "Critical Error: CRD installation failed. Binary not found."
+            exit 1
+        }
+        Write-Host "Found CRD at: $($launcher.FullName)"
+
+        # কোড ক্লিন করা (Regex ব্যবহার করে)
+        if ($env:RAW_CODE -match '4/[0-9a-zA-Z\-_]+') {
+            $authCode = $matches[0]
+        } else {
+            Write-Error "Invalid Code Format! Please assume the code starts with 4/..."
+            exit 1
+        }
+
+        # মেইন কমান্ড রান করা
+        & $launcher.FullName --code="$authCode" --redirect-url="https://remotedesktop.google.com/_/oauthredirect" --name="GitHub-VPS" --pin="$env:PIN"
+
+    - name: Keep Session Alive
+      run: |
+        Write-Host "Success! Connect here: https://remotedesktop.google.com/access"
+        while ($true) {
+          Start-Sleep -Seconds 60
+          Write-Host "Session is active..."
+        }
