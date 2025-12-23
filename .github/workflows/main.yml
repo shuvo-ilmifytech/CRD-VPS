@@ -1,0 +1,89 @@
+name: Windows CRD (Syntax Fixed)
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    name: Start Windows CRD
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Download CRD (With Verification)
+      shell: powershell
+      run: |
+        $url = "https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.msi"
+        $output = "crd.msi"
+        $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        
+        # লুপ চালিয়ে ফাইল নামানোর চেষ্টা
+        for ($i=1; $i -le 5; $i++) {
+            # ফিক্স: ${i} ব্যবহার করা হয়েছে যাতে কোলন (:) নিয়ে সমস্যা না হয়
+            Write-Host "Attempt ${i}: Downloading CRD..."
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $output -UserAgent $userAgent -TimeoutSec 30
+            } catch {
+                Write-Host "Download Error, retrying..."
+            }
+
+            if (Test-Path $output) {
+                $size = (Get-Item $output).Length
+                if ($size -gt 5000000) { # ৫ মেগাবাইটের বেশি হতে হবে
+                    Write-Host "Download Success! File size: $size bytes"
+                    break
+                } else {
+                    Write-Host "Fake file detected ($size bytes). Deleting and retrying..."
+                    Remove-Item $output
+                }
+            }
+            Start-Sleep -Seconds 5
+        }
+
+        if (-not (Test-Path $output)) {
+            Write-Error "Failed to download valid CRD installer after 5 attempts."
+            exit 1
+        }
+
+    - name: Install CRD
+      run: |
+        Write-Host "Installing CRD..."
+        Start-Process msiexec.exe -ArgumentList "/i crd.msi /qn" -Wait
+        Remove-Item crd.msi
+
+    - name: Authorize and Start
+      shell: powershell
+      env:
+        MY_SECRET_CODE: ${{ secrets.CRD_CODE }}
+        MY_PIN: ${{ secrets.PIN }}
+      run: |
+        # ফাইলটি খুঁজা হচ্ছে
+        $launcher = Get-ChildItem "C:\Program Files (x86)\Google\Chrome Remote Desktop" -Filter "remoting_start_host.exe" -Recurse | Select-Object -First 1
+
+        if (-not $launcher) {
+            Write-Error "CRD Binary not found! Installation might have failed."
+            exit 1
+        }
+        Write-Host "Found binary at: $($launcher.FullName)"
+
+        # কোড ক্লিন করা
+        $rawCode = $env:MY_SECRET_CODE
+        if ($rawCode -match '4/[0-9a-zA-Z\-_]+') {
+            $cleanCode = $matches[0]
+        } else {
+            Write-Error "Invalid Code Format! Please check your Secret."
+            exit 1
+        }
+
+        # রান করা
+        & $launcher.FullName --code="$cleanCode" --redirect-url="https://remotedesktop.google.com/_/oauthredirect" --name="GitHub-VPS" --pin="$env:MY_PIN"
+
+    - name: Keep Session Alive
+      run: |
+        Write-Host "Success! Connect here: https://remotedesktop.google.com/access"
+        while ($true) {
+          Start-Sleep -Seconds 60
+          Write-Host "Session is active..."
+        }
